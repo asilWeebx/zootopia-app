@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "1007446971112",
+    "project_id": "dukonline-f6e5a",
+    "storage_bucket": "dukonline-f6e5a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1007446971112:android:af38ab12fc7d3db51aef5d",
+        "android_client_info": {
+          "package_name": "com.dukonline.dukonline_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB-_QrwqQqIH3rRN7YhridQB4zPwJ9E7VI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1007446971112:android:9de02161a85e40bf1aef5d",
+        "android_client_info": {
+          "package_name": "com.mirsolioptom.store_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB-_QrwqQqIH3rRN7YhridQB4zPwJ9E7VI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
