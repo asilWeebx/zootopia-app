@@ -1,53 +1,110 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:http/http.dart' as http;
+
 import '../config/app_config.dart';
+import '../l10n/strings.dart';
 import '../models/models.dart';
 
+class StorefrontError implements Exception {
+  final String message;
+  final int status;
+  const StorefrontError(this.message, this.status);
+  @override
+  String toString() => message;
+}
+
+/// API'ga yetib bo'lmadi (internet yo'q, vaqt tugadi).
+class NetworkError implements Exception {
+  const NetworkError();
+  @override
+  String toString() => tr.network;
+}
+
 class ApiService {
+  /// api.dukonline.uz User-Agent'siz so'rovlarga 403 qaytaradi.
+  static const _userAgent = 'dukonline-store-app/1.0 (zootopiya)';
+
   static Map<String, String> get _headers => {
-    'Content-Type': 'application/json',
-    'X-Storefront-Key': AppConfig.storefrontKey,
-  };
+        'Content-Type': 'application/json',
+        'X-Storefront-Key': AppConfig.storefrontKey,
+        'User-Agent': _userAgent,
+      };
 
-  static String _url(String path) => '${AppConfig.apiUrl}$path';
+  static Uri _url(String path) => Uri.parse('${AppConfig.apiUrl}$path');
 
-  static Future<Map<String, dynamic>> _get(String path) async {
-    final r = await http.get(Uri.parse(_url(path)), headers: _headers);
-    if (r.statusCode != 200) {
-      try {
-        final body = jsonDecode(utf8.decode(r.bodyBytes));
-        throw Exception(body['error'] ?? body['detail'] ?? 'Xatolik: ${r.statusCode}');
-      } catch (e) {
-        if (e is Exception) rethrow;
-        throw Exception('Xatolik: ${r.statusCode}');
-      }
+  /// Media manzillari mutlaq (CDN) yoki API hostiga nisbatan keladi.
+  static String media(String? url) {
+    if (url == null || url.isEmpty) return '';
+    if (RegExp(r'^(https?:|data:|blob:)').hasMatch(url)) return url;
+    return AppConfig.apiUrl.replaceFirst(RegExp(r'/api/?$'), '') + url;
+  }
+
+  static Future<dynamic> _send(Future<http.Response> Function() request) async {
+    final http.Response r;
+    try {
+      r = await request().timeout(const Duration(seconds: 25));
+    } on SocketException {
+      throw const NetworkError();
+    } on TimeoutException {
+      throw const NetworkError();
+    } on http.ClientException {
+      throw const NetworkError();
+    } on HandshakeException {
+      throw const NetworkError();
     }
-    return jsonDecode(utf8.decode(r.bodyBytes));
+    dynamic body;
+    try {
+      body = jsonDecode(utf8.decode(r.bodyBytes));
+    } catch (_) {
+      body = null;
+    }
+    if (r.statusCode < 200 || r.statusCode >= 300) {
+      final error = body is Map ? (body['error'] ?? body['detail']) : null;
+      throw StorefrontError(error is String && error.isNotEmpty ? error : tr.apiStatus(r.statusCode), r.statusCode);
+    }
+    return body;
   }
 
-  static Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body) async {
-    final r = await http.post(Uri.parse(_url(path)), headers: _headers, body: jsonEncode(body));
-    final data = jsonDecode(utf8.decode(r.bodyBytes));
-    if (r.statusCode >= 400) throw Exception(data['error'] ?? 'Xatolik');
-    return data;
+  static Future<dynamic> _get(String path) => _send(() => http.get(_url(path), headers: _headers));
+
+  static Future<dynamic> _post(String path, Map<String, dynamic> body) =>
+      _send(() => http.post(_url(path), headers: _headers, body: jsonEncode(body)));
+
+  /// Do'kon nomi, valyuta va ERP'ga yuklangan bannerlar.
+  static Future<StoreInfo> getInfo() async =>
+      StoreInfo.fromJson(Map<String, dynamic>.from(await _get('/storefront/info/') as Map), media);
+
+  /// Butun katalog bitta javobda. `customerCode` — shu mijozning narxlari.
+  static Future<CatalogResponse> getCatalog({String? customerCode}) async {
+    final query = customerCode != null && customerCode.isNotEmpty
+        ? '?customer_code=${Uri.encodeComponent(customerCode)}'
+        : '';
+    return CatalogResponse.fromJson(Map<String, dynamic>.from(await _get('/storefront/products/$query') as Map));
   }
 
-  static Future<StoreInfo> getInfo() async {
-    final data = await _get('/storefront/info/');
-    return StoreInfo.fromJson(data);
+  /// Ko'p sotilganlar — katalog bilan solishtiriladigan id'lar.
+  static Future<List<int>> getTopProductIds({int limit = 12}) async {
+    final data = await _get('/storefront/top-products/?limit=$limit');
+    final ids = data is Map ? data['product_ids'] : null;
+    return ids is List ? ids.whereType<num>().map((n) => n.toInt()).toList() : const [];
   }
 
-  static Future<List<Product>> getProducts({String? customerCode}) async {
-    final q = customerCode != null ? '?customer_code=${Uri.encodeComponent(customerCode)}' : '';
-    final data = await _get('/storefront/products/$q');
-    final raw = data['results'];
-    final list = raw is List ? raw : <dynamic>[];
-    return list.map((p) => Product.fromJson(p as Map<String, dynamic>)).toList();
-  }
+  /// Do'konda berilgan mijoz kodini mijoz yozuviga almashtiradi.
+  static Future<Customer> login(String code) async =>
+      Customer(Map<String, dynamic>.from(await _post('/storefront/login/', {'code': code}) as Map));
 
-  static Future<Customer> login(String code) async {
-    final data = await _post('/storefront/login/', {'code': code});
-    return Customer.fromJson(data);
+  /// Kirgan mijozning qarzi, balansi va xaridlar tarixi.
+  static Future<CustomerAccount> getCustomer(String code) async => CustomerAccount.fromJson(
+      Map<String, dynamic>.from(await _get('/storefront/customer/?code=${Uri.encodeComponent(code)}') as Map));
+
+  /// Buyurtma raqamini qaytaradi.
+  static Future<String> createOrder(Map<String, dynamic> payload) async {
+    final data = await _post('/storefront/orders/', payload);
+    final no = data is Map ? (data['order_no'] ?? data['id']) : null;
+    return no == null ? '' : '$no';
   }
 
   /// App Store 5.1.1(v): hisobni o'chirish — server tomonda nofaol qilinadi,
@@ -63,54 +120,6 @@ class ApiService {
 
   /// Token'ni o'chiradi (chiqishda / hisob o'chirilganda).
   static Future<void> unregisterDevice(String token) async {
-    final r = await http.delete(Uri.parse(_url('/storefront/devices/')),
-        headers: _headers, body: jsonEncode({'token': token}));
-    if (r.statusCode >= 400) throw Exception('unregister failed');
-  }
-
-  static Future<CustomerData> getCustomerData(String code) async {
-    final data = await _get('/storefront/customer/?code=${Uri.encodeComponent(code)}');
-    return CustomerData.fromJson(data);
-  }
-
-  static Future<OnlineOrder> submitOrder({
-    required String name,
-    required String phone,
-    String? note,
-    required List<CartItem> cart,
-    String? customerCode,
-    String deliveryType = 'courier', // 'courier' | 'pickup'
-    String paymentMethod = 'cash', // 'cash' | 'card'
-    String? address,
-    String? landmark,
-    double? latitude,
-    double? longitude,
-  }) async {
-    final data = await _post('/storefront/orders/', {
-      'customer_name': name,
-      'phone': phone,
-      if (note != null && note.isNotEmpty) 'note': note,
-      if (customerCode != null) 'customer_code': customerCode,
-      'delivery_type': deliveryType,
-      'payment_method': paymentMethod,
-      if (address != null && address.isNotEmpty) 'address': address,
-      if (landmark != null && landmark.isNotEmpty) 'landmark': landmark,
-      if (latitude != null) 'latitude': latitude,
-      if (longitude != null) 'longitude': longitude,
-      'items': cart.map((c) => {
-        'product_id': c.productId,
-        if (c.variantId != null) 'variant_id': c.variantId,
-        // unit_id faqat haqiqiy (>0) bo'lsa yuboriladi — 0/null server FK 500 sabab bo'ladi.
-        if (c.unitId != null && c.unitId! > 0) 'unit_id': c.unitId,
-        'qty': c.qty,
-      }).toList(),
-    });
-    return OnlineOrder.fromJson(data);
-  }
-
-  static String mediaUrl(String? path) {
-    if (path == null || path.isEmpty) return '';
-    if (path.startsWith('http')) return path;
-    return AppConfig.apiUrl.replaceAll(RegExp(r'/api/?$'), '') + path;
+    await _send(() => http.delete(_url('/storefront/devices/'), headers: _headers, body: jsonEncode({'token': token})));
   }
 }

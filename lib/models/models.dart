@@ -1,328 +1,594 @@
+// dukonline.uz Storefront API turlari — Zootopia do'konining jonli
+// javoblaridan olingan (saytdagi `src/lib/storefront/types.ts`).
+//
+// API'da mahsulot, kategoriya yoki sahifalash endpointi yo'q: butun katalog
+// bitta javobda keladi, qolgan hamma narsa undan hisoblanadi.
+
+double _num(Object? v, [double fallback = 0]) {
+  if (v is num) return v.toDouble();
+  if (v is String) return double.tryParse(v) ?? fallback;
+  return fallback;
+}
+
+double? _numOrNull(Object? v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  if (v is String) return double.tryParse(v);
+  return null;
+}
+
+int? _intOrNull(Object? v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v);
+  return null;
+}
+
+String _str(Object? v) => v is String ? v : (v == null ? '' : '$v');
+
+/// Mahsulot sotiladigan bir usul ("Kilogram", "Dona", "Quti"). `multiplier` —
+/// shu birlikdan bittasi asosiy birlikdan nechtasini oladi (24 talik quti).
+class ProductUnit {
+  /// Mahsulotning o'z asosiy birligida null — buyurtmada yuborilmaydi.
+  final int? unitId;
+  final String unitName;
+  final double multiplier;
+  final double price;
+  final double? originalPrice;
+  /// Bo'sh — do'konning asosiy valyutasi (so'm).
+  final String currency;
+  /// Mahsulotning o'z `currency`sidagi narx.
+  final double curPrice;
+  final double? curOriginalPrice;
+  final bool? isBase;
+
+  const ProductUnit({
+    required this.unitId,
+    required this.unitName,
+    required this.multiplier,
+    required this.price,
+    this.originalPrice,
+    this.currency = '',
+    required this.curPrice,
+    this.curOriginalPrice,
+    this.isBase,
+  });
+
+  factory ProductUnit.fromJson(Map<String, dynamic> j) => ProductUnit(
+        unitId: _intOrNull(j['unit_id']),
+        unitName: _str(j['unit_name']),
+        multiplier: _num(j['multiplier'], 1),
+        price: _num(j['price']),
+        originalPrice: _numOrNull(j['original_price']),
+        currency: _str(j['currency']),
+        curPrice: _numOrNull(j['cur_price']) ?? _num(j['price']),
+        curOriginalPrice: _numOrNull(j['cur_original_price']),
+        isBase: j['is_base'] is bool ? j['is_base'] as bool : null,
+      );
+}
+
+/// Mahsulotning bir ta'mi, o'lchami yoki rangi (mol go'shti / tovuq, 400 g / 2 kg).
 class ProductVariant {
   final int id;
   final String name;
   final String sku;
+  final String? image;
   final double price;
-  final double? stock;
-  final bool inStock;
+  final double? originalPrice;
   final String currency;
   final double curPrice;
+  final double? curOriginalPrice;
+  /// Asosiy birlikda; qoldiq hisoblanmasa null.
+  final double? stock;
+  final bool inStock;
 
-  ProductVariant({
-    required this.id, required this.name, required this.sku,
-    required this.price, this.stock, required this.inStock,
-    this.currency = '', double? curPrice,
-  }) : curPrice = curPrice ?? price;
+  const ProductVariant({
+    required this.id,
+    required this.name,
+    this.sku = '',
+    this.image,
+    required this.price,
+    this.originalPrice,
+    this.currency = '',
+    required this.curPrice,
+    this.curOriginalPrice,
+    this.stock,
+    this.inStock = true,
+  });
 
   factory ProductVariant.fromJson(Map<String, dynamic> j) => ProductVariant(
-    id: j['id'] ?? 0,
-    name: j['name'] ?? '',
-    sku: j['sku'] ?? '',
-    price: double.tryParse('${j['price'] ?? 0}') ?? 0,
-    stock: j['stock'] != null ? double.tryParse('${j['stock']}') : null,
-    inStock: j['in_stock'] ?? true,
-    currency: j['currency'] ?? '',
-    curPrice: j['cur_price'] != null ? double.tryParse('${j['cur_price']}') : null,
-  );
-}
+        id: _intOrNull(j['id']) ?? 0,
+        name: _str(j['name']),
+        sku: _str(j['sku']),
+        image: j['image'] is String ? j['image'] as String : null,
+        price: _num(j['price']),
+        originalPrice: _numOrNull(j['original_price']),
+        currency: _str(j['currency']),
+        curPrice: _numOrNull(j['cur_price']) ?? _num(j['price']),
+        curOriginalPrice: _numOrNull(j['cur_original_price']),
+        stock: _numOrNull(j['stock']),
+        inStock: j['in_stock'] != false,
+      );
 
-class ProductUnit {
-  final int unitId;
-  final String unitName;
-  final double price;
-  final double multiplier;
-  final String currency;   // '' = so'm, 'USD' = dollar
-  final double curPrice;   // asl valyutadagi narx (display uchun)
-
-  ProductUnit({required this.unitId, required this.unitName, required this.price, required this.multiplier, this.currency = '', double? curPrice}) : curPrice = curPrice ?? price;
-
-  factory ProductUnit.fromJson(Map<String, dynamic> j) => ProductUnit(
-    unitId: j['unit_id'] ?? 0,
-    unitName: j['unit_name'] ?? 'dona',
-    price: double.tryParse('${j['price'] ?? 0}') ?? 0,
-    multiplier: double.tryParse('${j['multiplier'] ?? 1}') ?? 1,
-    currency: j['currency'] ?? '',
-    curPrice: j['cur_price'] != null ? double.tryParse('${j['cur_price']}') : null,
-  );
+  ProductVariant withImage(String? image) => ProductVariant(
+        id: id, name: name, sku: sku, image: image, price: price, originalPrice: originalPrice,
+        currency: currency, curPrice: curPrice, curOriginalPrice: curOriginalPrice, stock: stock, inStock: inStock,
+      );
 }
 
 class Product {
   final int id;
   final String name;
-  final String? image;
+  final String sku;
+  final String description;
   final int? categoryId;
   final String? categoryName;
   final int? categoryParentId;
   final String? categoryParentName;
-  final String? description;
+  /// Asosiy rasm.
+  final String image;
+  /// Butun galereya, asosiy rasm birinchi.
+  final List<String> images;
+  /// `tracked` — qoldiq kamayadi; boshqalari doim sotiladi.
   final String stockType;
+  /// Asosiy birlikda (`multiplier: 1` bo'lgan birlik).
   final double stock;
   final bool inStock;
   final bool hasVariants;
   final List<ProductVariant> variants;
   final List<ProductUnit> units;
+  final double discountPercent;
+  /// ERP'da kiritilgan erkin xususiyatlar; hozircha kelmaydi.
+  final Map<String, String> attributes;
 
-  Product({
-    required this.id, required this.name, this.image,
-    this.categoryId, this.categoryName, this.categoryParentId, this.categoryParentName,
-    this.description,
-    required this.stockType, required this.stock,
-    required this.inStock, required this.hasVariants,
-    required this.variants, required this.units,
+  const Product({
+    required this.id,
+    required this.name,
+    this.sku = '',
+    this.description = '',
+    this.categoryId,
+    this.categoryName,
+    this.categoryParentId,
+    this.categoryParentName,
+    this.image = '',
+    this.images = const [],
+    this.stockType = 'tracked',
+    this.stock = 0,
+    this.inStock = true,
+    this.hasVariants = false,
+    this.variants = const [],
+    this.units = const [],
+    this.discountPercent = 0,
+    this.attributes = const {},
   });
 
-  factory Product.fromJson(Map<String, dynamic> j) => Product(
-    id: j['id'],
-    name: j['name'] ?? '',
-    image: j['image'],
-    categoryId: j['category_id'],
-    categoryName: j['category_name'],
-    categoryParentId: j['category_parent_id'],
-    categoryParentName: j['category_parent_name'],
-    description: j['description'],
-    stockType: j['stock_type'] ?? 'untracked',
-    stock: double.tryParse('${j['stock'] ?? 0}') ?? 0,
-    inStock: j['in_stock'] ?? true,
-    hasVariants: j['has_variants'] ?? false,
-    variants: (j['variants'] as List? ?? []).map((v) => ProductVariant.fromJson(v)).toList(),
-    units: (j['units'] as List? ?? []).map((u) => ProductUnit.fromJson(u)).toList(),
-  );
-}
-
-class Category {
-  final int id;
-  final String name;
-  final int? parentId; // null bo'lsa — yuqori (top) kategoriya
-  Category({required this.id, required this.name, this.parentId});
-}
-
-// Og'irlik/o'lchov birlikmi (kg, gramm) — kasr miqdor bilan sotiladi
-bool isWeightUnit(String? name) {
-  final n = (name ?? '').trim().toLowerCase();
-  return RegExp(r'kilogram|kilogramm|gramm|\bkg\b|\bg\b').hasMatch(n);
-}
-
-// Kasr miqdor qabul qiladigan birlikmi — og'irlik (kg), maydon (m²),
-// hajm (m³), uzunlik (metr), suyuqlik (litr). "dona" va qadoq birliklari
-// faqat butun bo'ladi.
-bool allowsFraction(String? name) {
-  final n = (name ?? '').trim().toLowerCase();
-  return RegExp(
-    r'kilogram|kilogramm|gramm|\bkg\b|\bg\b'        // og'irlik
-    r'|kvadrat|kub|\bm2\b|\bm3\b|m²|m³'              // maydon/hajm
-    r'|metr|santimetr|\bsm\b|millimetr|\bmm\b'       // uzunlik
-    r'|litr|millilitr|\bml\b',                        // suyuqlik
-  ).hasMatch(n);
-}
-
-// O'zbekiston telefon raqamini normallashtirish — ko'p mijoz +998 ni yozmaydi,
-// tizim o'zi qo'shib qo'yadi. '+' bilan boshlansa tegilmaydi.
-String normalizeUzPhone(String raw) {
-  final v = raw.trim();
-  if (v.isEmpty) return '';
-  if (v.startsWith('+')) return v;
-  final digits = v.replaceAll(RegExp(r'\D'), '');
-  if (digits.length == 12 && digits.startsWith('998')) return '+$digits';
-  if (digits.length == 9) return '+998$digits';
-  return v;
-}
-
-// Xatoni foydalanuvchiga sodda qilib beradi (texnik tafsilotlarsiz)
-String friendlyError(Object e) {
-  final s = e.toString().toLowerCase();
-  if (s.contains('socketexception') ||
-      s.contains('failed host lookup') ||
-      s.contains('network is unreachable') ||
-      s.contains('connection refused') ||
-      s.contains('connection closed') ||
-      s.contains('connection reset') ||
-      s.contains('clientexception') ||
-      s.contains('timeoutexception') ||
-      s.contains('handshake')) {
-    return 'Internet aloqasi yo\'q. Ulanishni tekshirib, qayta urinib ko\'ring.';
+  factory Product.fromJson(Map<String, dynamic> j) {
+    final attrs = <String, String>{};
+    final rawAttrs = j['attributes'];
+    if (rawAttrs is Map) {
+      rawAttrs.forEach((k, v) {
+        final value = v == null ? '' : '$v'.trim();
+        if (value.isNotEmpty) attrs['$k'] = value;
+      });
+    }
+    return Product(
+      id: _intOrNull(j['id']) ?? 0,
+      name: _str(j['name']),
+      sku: _str(j['sku']),
+      description: _str(j['description']),
+      categoryId: _intOrNull(j['category_id']),
+      categoryName: j['category_name'] as String?,
+      categoryParentId: _intOrNull(j['category_parent_id']),
+      categoryParentName: j['category_parent_name'] as String?,
+      image: _str(j['image']),
+      images: (j['images'] as List? ?? const []).whereType<String>().toList(),
+      stockType: j['stock_type'] is String ? j['stock_type'] as String : 'untracked',
+      stock: _num(j['stock']),
+      inStock: j['in_stock'] != false,
+      hasVariants: j['has_variants'] == true,
+      variants: (j['variants'] as List? ?? const [])
+          .whereType<Map>()
+          .map((v) => ProductVariant.fromJson(Map<String, dynamic>.from(v)))
+          .toList(),
+      units: (j['units'] as List? ?? const [])
+          .whereType<Map>()
+          .map((u) => ProductUnit.fromJson(Map<String, dynamic>.from(u)))
+          .toList(),
+      discountPercent: _num(j['discount_percent']),
+      attributes: attrs,
+    );
   }
-  return 'Nimadir xato ketdi. Qayta urinib ko\'ring.';
+
+  /// Kategoriya maydonlari qayta yoziladi (`relabelCategories`, `normalizeCategories`).
+  Product withCategory({
+    required int? categoryId,
+    required String? categoryName,
+    required int? categoryParentId,
+    required String? categoryParentName,
+  }) =>
+      Product(
+        id: id, name: name, sku: sku, description: description,
+        categoryId: categoryId, categoryName: categoryName,
+        categoryParentId: categoryParentId, categoryParentName: categoryParentName,
+        image: image, images: images, stockType: stockType, stock: stock, inStock: inStock,
+        hasVariants: hasVariants, variants: variants, units: units,
+        discountPercent: discountPercent, attributes: attributes,
+      );
+
+  Product withMedia({required String name, required String image, required List<String> images, required List<ProductVariant> variants}) => Product(
+        id: id, name: name, sku: sku, description: description,
+        categoryId: categoryId, categoryName: categoryName,
+        categoryParentId: categoryParentId, categoryParentName: categoryParentName,
+        image: image, images: images, stockType: stockType, stock: stock, inStock: inStock,
+        hasVariants: hasVariants, variants: variants, units: units,
+        discountPercent: discountPercent, attributes: attributes,
+      );
 }
 
-// Miqdorni ko'rsatish: butun bo'lsa "2", kasr bo'lsa "0.5"
-String fmtQty(num n) {
-  final d = n.toDouble();
-  if (d == d.roundToDouble()) return d.toInt().toString();
-  return d.toStringAsFixed(3).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+class CatalogResponse {
+  final List<Product> results;
+  final bool showStock;
+  final bool showImages;
+  /// Kategoriya id → rasm.
+  final Map<int, String> categoryImages;
+
+  const CatalogResponse({required this.results, this.showStock = true, this.showImages = true, this.categoryImages = const {}});
+
+  factory CatalogResponse.fromJson(Map<String, dynamic> j) {
+    final images = <int, String>{};
+    for (final c in (j['category_images'] as List? ?? const []).whereType<Map>()) {
+      final id = _intOrNull(c['id']);
+      final image = c['image'];
+      if (id != null && image is String && image.isNotEmpty) images[id] = image;
+    }
+    return CatalogResponse(
+      results: (j['results'] as List? ?? const [])
+          .whereType<Map>()
+          .map((p) => Product.fromJson(Map<String, dynamic>.from(p)))
+          .toList(),
+      showStock: j['show_stock'] != false,
+      showImages: j['show_images'] != false,
+      categoryImages: images,
+    );
+  }
 }
 
-class CartItem {
-  final String key;
-  final int productId;
-  final int? unitId;
-  final int? variantId;
-  final String unitName;
-  final String name;
-  final String variantName;
-  final String? image;
-  final double price;
-  final String currency;
-  final double curPrice;
-  double qty;            // kg tovarda kasr bo'lishi mumkin
-  final double maxQty;
-  final bool weight;     // og'irlik (kg) tovar
-
-  CartItem({
-    required this.key, required this.productId,
-    this.unitId, this.variantId,
-    required this.unitName, required this.name,
-    this.variantName = '', this.image,
-    required this.price, required this.qty, required this.maxQty,
-    this.currency = '', double? curPrice,
-    this.weight = false,
-  }) : curPrice = curPrice ?? price;
+/// ERP'dagi banner — o'z matni bilan rasm.
+class StoreBanner {
+  final String image;
+  final String title;
+  /// 'left' | 'right'.
+  final String align;
+  const StoreBanner({required this.image, this.title = '', this.align = 'left'});
 }
 
 class StoreInfo {
+  /// "Zootopia".
+  final String organization;
+  /// "Крытый магазин" — qoldiq olinadigan filial.
   final String store;
-  StoreInfo({required this.store});
-  factory StoreInfo.fromJson(Map<String, dynamic> j) => StoreInfo(store: j['store'] ?? "Do'kon");
+  final String currency;
+  final List<StoreBanner> banners;
+  const StoreInfo({required this.organization, required this.store, this.currency = '', this.banners = const []});
+
+  factory StoreInfo.fromJson(Map<String, dynamic> j, String Function(String) resolve) => StoreInfo(
+        organization: _str(j['organization']),
+        store: _str(j['store']),
+        currency: _str(j['currency']),
+        banners: normalizeBanners(j['banners'] as List? ?? const [], resolve),
+      );
+}
+
+final _imageExt = RegExp(r'\.(avif|gif|jpe?g|png|webp)(\?|$)', caseSensitive: false);
+
+/// ERP bannerlari oddiy URL yoki rasmi turli kalitlardagi obyekt bo'lib keladi.
+List<StoreBanner> normalizeBanners(List raw, String Function(String) resolve) {
+  final out = <StoreBanner>[];
+  for (final banner in raw) {
+    if (banner is String) {
+      if (banner.trim().isNotEmpty) out.add(StoreBanner(image: resolve(banner)));
+      continue;
+    }
+    if (banner is! Map) continue;
+    String? image;
+    for (final key in ['image_url', 'image', 'url', 'photo', 'file']) {
+      final v = banner[key];
+      if (v is String && v.trim().isNotEmpty) {
+        image = v;
+        break;
+      }
+    }
+    image ??= banner.values.whereType<String>().where(_imageExt.hasMatch).firstOrNull;
+    if (image == null) continue;
+    out.add(StoreBanner(
+      image: resolve(image),
+      title: banner['title'] is String ? banner['title'] as String : '',
+      align: banner['align'] == 'right' ? 'right' : 'left',
+    ));
+  }
+  return out;
+}
+
+/// Mahsulot qatorlaridan tuzilgan kategoriya; `parentId` null — yuqori daraja.
+class Category {
+  final int id;
+  final String name;
+  final int? parentId;
+  const Category({required this.id, required this.name, this.parentId});
 }
 
 class Customer {
+  /// Serverdan kelgan yozuv — keyingi kirishgacha qurilmada shunday saqlanadi.
+  final Map<String, dynamic> raw;
+  const Customer(this.raw);
+
+  String get customerCode => _str(raw['customer_code'] ?? raw['code']);
+  String get code => _str(raw['code']);
+  String get name => _str(raw['name']);
+  String get customerName => _str(raw['customer_name']);
+  String get phone => _str(raw['phone']);
+  String get phoneNumber => _str(raw['phone_number']);
+  double get debt => _num(raw['debt']);
+  double get credit => _num(raw['credit']);
+  Map<String, double> get currencyDebts => _balances(raw['currency_debts']);
+  Map<String, double> get currencyCredits => _balances(raw['currency_advances']);
+
+  /// Ism, bo'lmasa kod.
+  String get displayName => name.isNotEmpty ? name : (customerName.isNotEmpty ? customerName : customerCode);
+
+  static Map<String, double> _balances(Object? v) {
+    if (v is! Map) return const {};
+    return {for (final e in v.entries) '${e.key}': _num(e.value)};
+  }
+}
+
+class CustomerSaleItem {
   final String name;
-  final String code;
-  final String? phone;
-  final double debt;
-  final double credit;
-
-  Customer({required this.name, required this.code, this.phone, required this.debt, required this.credit});
-
-  factory Customer.fromJson(Map<String, dynamic> j) => Customer(
-    name: j['name'] ?? '',
-    code: j['customer_code'] ?? j['code'] ?? '',
-    phone: j['phone'],
-    debt: double.tryParse('${j['debt'] ?? 0}') ?? 0,
-    credit: double.tryParse('${j['credit'] ?? 0}') ?? 0,
-  );
-}
-
-class SaleItem {
-  final String productName;
-  final double quantity;
-  final String unitName;
+  final double qty;
+  final String unit;
   final double price;
+  const CustomerSaleItem({required this.name, required this.qty, required this.unit, required this.price});
 
-  SaleItem({required this.productName, required this.quantity, required this.unitName, required this.price});
-
-  factory SaleItem.fromJson(Map<String, dynamic> j) => SaleItem(
-    productName: j['product_name'] ?? j['name'] ?? '',
-    quantity: double.tryParse('${j['quantity'] ?? j['qty'] ?? 0}') ?? 0,
-    unitName: j['unit_name'] ?? j['unit'] ?? 'dona',
-    price: double.tryParse('${j['price'] ?? 0}') ?? 0,
-  );
+  factory CustomerSaleItem.fromJson(Map<String, dynamic> j) => CustomerSaleItem(
+        name: _str(j['name'] ?? j['product_name']),
+        qty: _num(j['qty'] ?? j['quantity']),
+        unit: _str(j['unit'] ?? j['unit_name']),
+        price: _num(j['price']),
+      );
 }
 
-class Sale {
-  final int id;
-  final String receiptNumber;
-  final String date;
-  final double total;
-  final double paid;
-  final double debt;
-  final String paymentMethod;
-  final String status;
-  final List<Map<String, dynamic>> paymentBreakdown;
-  final List<SaleItem> items;
+class PaymentPart {
+  final String method;
+  final double amount;
+  const PaymentPart(this.method, this.amount);
+}
 
-  Sale({
-    required this.id, required this.receiptNumber, required this.date,
-    required this.total, required this.paid, required this.debt,
-    required this.paymentMethod, required this.status,
-    required this.paymentBreakdown, required this.items,
+class CustomerSale {
+  final String receiptNumber;
+  final String createdAt;
+  final double total;
+  final double? paid;
+  final double? debt;
+  final String debtCurrency;
+  final double? debtCurrencyAmount;
+  final double? debtRate;
+  final List<PaymentPart> paymentBreakdown;
+  final String paymentMethod;
+  final List<CustomerSaleItem> items;
+
+  const CustomerSale({
+    required this.receiptNumber,
+    required this.createdAt,
+    required this.total,
+    this.paid,
+    this.debt,
+    this.debtCurrency = '',
+    this.debtCurrencyAmount,
+    this.debtRate,
+    this.paymentBreakdown = const [],
+    this.paymentMethod = '',
+    this.items = const [],
   });
 
-  factory Sale.fromJson(Map<String, dynamic> j) => Sale(
-    id: j['id'] ?? 0,
-    receiptNumber: j['receipt_number'] ?? '',
-    date: j['date'] ?? j['created_at'] ?? '',
-    total: double.tryParse('${j['total'] ?? 0}') ?? 0,
-    paid: double.tryParse('${j['paid'] ?? 0}') ?? 0,
-    debt: double.tryParse('${j['debt'] ?? 0}') ?? 0,
-    paymentMethod: j['payment_method'] ?? '',
-    status: j['status'] ?? '',
-    paymentBreakdown: (j['payment_breakdown'] as List? ?? [])
-        .map((e) => Map<String, dynamic>.from(e as Map)).toList(),
-    items: (j['items'] as List? ?? []).map((i) => SaleItem.fromJson(i)).toList(),
-  );
+  factory CustomerSale.fromJson(Map<String, dynamic> j) => CustomerSale(
+        receiptNumber: _str(j['receipt_number']),
+        createdAt: _str(j['created_at'] ?? j['date']),
+        total: _num(j['total']),
+        paid: _numOrNull(j['paid']),
+        debt: _numOrNull(j['debt']),
+        debtCurrency: _str(j['debt_currency']),
+        debtCurrencyAmount: _numOrNull(j['debt_currency_amount']),
+        debtRate: _numOrNull(j['debt_rate']),
+        paymentBreakdown: (j['payment_breakdown'] as List? ?? const [])
+            .whereType<Map>()
+            .map((p) => PaymentPart(_str(p['method']), _num(p['amount'])))
+            .toList(),
+        paymentMethod: _str(j['payment_method']),
+        items: (j['items'] as List? ?? const [])
+            .whereType<Map>()
+            .map((i) => CustomerSaleItem.fromJson(Map<String, dynamic>.from(i)))
+            .toList(),
+      );
 }
 
-// To'lov usuli yorlig'i (o'zbekcha)
-String paymentMethodLabel(String m) {
-  switch (m) {
-    case 'cash': return 'Naqd';
-    case 'card': return 'Karta';
-    case 'transfer': return "O'tkazma";
-    case 'credit': return 'Nasiya';
-    case 'mixed': return 'Aralash';
-    case 'click': return 'Click';
-    case 'payme': return 'Payme';
-    case 'uzum': return 'Uzum';
-    case 'humo': return 'Humo';
-    case 'uzcard': return 'UzCard';
-    case 'installment': return "Bo'lib to'lash";
-    case 'exchange_credit': return 'Ayirboshlash';
-    default: return m.isEmpty ? '—' : m;
-  }
-}
-
-class OnlineOrder {
-  final int id;
+class CustomerOrder {
   final String orderNo;
+  final String createdAt;
+  final double total;
   final String status;
-  final String? createdAt;
-  final String? note;
-  final double? totalAmount;
+  const CustomerOrder({required this.orderNo, required this.createdAt, required this.total, required this.status});
 
-  OnlineOrder({required this.id, required this.orderNo, required this.status, this.createdAt, this.note, this.totalAmount});
-
-  factory OnlineOrder.fromJson(Map<String, dynamic> j) => OnlineOrder(
-    id: j['id'] ?? 0,
-    orderNo: j['order_no'] ?? j['id']?.toString() ?? '',
-    status: j['status'] ?? 'pending',
-    createdAt: j['created_at'],
-    note: j['note'],
-    totalAmount: double.tryParse('${j['total_amount'] ?? j['total'] ?? 0}'),
-  );
+  factory CustomerOrder.fromJson(Map<String, dynamic> j) => CustomerOrder(
+        orderNo: _str(j['order_no']),
+        createdAt: _str(j['created_at']),
+        total: _num(j['total'] ?? j['total_amount']),
+        status: _str(j['status']),
+      );
 }
 
-class Payment {
+class CustomerPayment {
   final double amount;
-  final String date;
-  final String type;
+  final String currency;
+  final String createdAt;
+  final String note;
+  const CustomerPayment({required this.amount, this.currency = '', required this.createdAt, this.note = ''});
 
-  Payment({required this.amount, required this.date, required this.type});
-
-  factory Payment.fromJson(Map<String, dynamic> j) => Payment(
-    amount: double.tryParse('${j['amount'] ?? 0}') ?? 0,
-    date: j['date'] ?? j['created_at'] ?? '',
-    type: j['payment_type'] ?? j['type'] ?? j['note'] ?? 'naqd',
-  );
+  factory CustomerPayment.fromJson(Map<String, dynamic> j) => CustomerPayment(
+        amount: _num(j['amount']),
+        currency: _str(j['currency']),
+        createdAt: _str(j['created_at'] ?? j['date']),
+        note: _str(j['note']),
+      );
 }
 
-class CustomerData {
+class CustomerAccount {
   final Customer customer;
-  final List<Sale> sales;
-  final List<OnlineOrder> orders;
-  final List<Payment> payments;
-  final double totalSpent;
+  final List<CustomerSale> sales;
+  final List<CustomerOrder> onlineOrders;
+  final List<CustomerPayment> payments;
+  const CustomerAccount({required this.customer, this.sales = const [], this.onlineOrders = const [], this.payments = const []});
 
-  CustomerData({required this.customer, required this.sales, required this.orders, required this.payments, required this.totalSpent});
+  factory CustomerAccount.fromJson(Map<String, dynamic> j) => CustomerAccount(
+        customer: Customer(Map<String, dynamic>.from(j['customer'] as Map? ?? const {})),
+        sales: (j['sales'] as List? ?? const [])
+            .whereType<Map>()
+            .map((s) => CustomerSale.fromJson(Map<String, dynamic>.from(s)))
+            .toList(),
+        onlineOrders: (j['online_orders'] as List? ?? const [])
+            .whereType<Map>()
+            .map((o) => CustomerOrder.fromJson(Map<String, dynamic>.from(o)))
+            .toList(),
+        payments: (j['payments'] as List? ?? const [])
+            .whereType<Map>()
+            .map((p) => CustomerPayment.fromJson(Map<String, dynamic>.from(p)))
+            .toList(),
+      );
+}
 
-  factory CustomerData.fromJson(Map<String, dynamic> j) {
-    final sales = (j['sales'] as List? ?? []).map((s) => Sale.fromJson(s)).toList();
-    final totalSpent = sales.fold<double>(0, (s, sale) => s + sale.total);
-    return CustomerData(
-      customer: Customer.fromJson(j['customer'] ?? {}),
-      sales: sales,
-      orders: (j['online_orders'] as List? ?? []).map((o) => OnlineOrder.fromJson(o)).toList(),
-      payments: (j['payments'] as List? ?? []).map((p) => Payment.fromJson(p)).toList(),
-      totalSpent: double.tryParse('${j['total_spent'] ?? 0}') ?? totalSpent,
-    );
-  }
+/// Savatning bir qatori: mahsulotning bir variantidan (ta'm/o'lcham yoki
+/// birlik) ma'lum miqdor.
+///
+///   key: `${productId}_${optionKey}`   masalan `8551_base`, `9160_u12`, `9201_v501`
+class CartItem {
+  final String key;
+  final int productId;
+  final int? variantId;
+  /// Faqat asosiy bo'lmagan birlik uchun (pauchlar qutisi).
+  final int? unitId;
+  /// Mahsulot sahifasidagi variantga qaytaradi (`base`, `u12`, `v501`).
+  final String optionKey;
+  /// Qaysi qoldiqdan oladi; bir pool'dagi qatorlar qoldiqni bo'lishadi.
+  final String pool;
+  /// Bu birlikdan bittasi asosiy birlikdan nechtasini oladi.
+  final double multiplier;
+
+  final String name;
+  /// Ta'm/o'lcham yoki birlik nomi; mahsulotda bitta variant bo'lsa bo'sh.
+  final String optionLabel;
+  final String sku;
+  final String image;
+
+  /// Qator birligida.
+  final double qty;
+  /// Qoldiqdan kelgan chegara; qoldiq hisoblanmasa `kUnlimited`.
+  final double maxQty;
+  /// "kg", "dona", "quti".
+  final String unit;
+  /// Kasr (1.5 kg) buyurtma qilish mumkinmi.
+  final bool decimal;
+
+  /// So'mda.
+  final double price;
+  /// Variantning o'z valyutasi; bo'sh — so'm.
+  final String currency;
+  /// `currency`dagi narx.
+  final double curPrice;
+
+  const CartItem({
+    required this.key,
+    required this.productId,
+    this.variantId,
+    this.unitId,
+    required this.optionKey,
+    required this.pool,
+    required this.multiplier,
+    required this.name,
+    this.optionLabel = '',
+    this.sku = '',
+    this.image = '',
+    required this.qty,
+    required this.maxQty,
+    required this.unit,
+    required this.decimal,
+    required this.price,
+    this.currency = '',
+    required this.curPrice,
+  });
+
+  CartItem copyWith({double? qty, double? maxQty}) => CartItem(
+        key: key, productId: productId, variantId: variantId, unitId: unitId, optionKey: optionKey,
+        pool: pool, multiplier: multiplier, name: name, optionLabel: optionLabel, sku: sku, image: image,
+        qty: qty ?? this.qty, maxQty: maxQty ?? this.maxQty, unit: unit, decimal: decimal,
+        price: price, currency: currency, curPrice: curPrice,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'key': key,
+        'product_id': productId,
+        'variant_id': variantId,
+        'unit_id': unitId,
+        'option_key': optionKey,
+        'pool': pool,
+        'multiplier': multiplier,
+        'name': name,
+        'option_label': optionLabel,
+        'sku': sku,
+        'image': image,
+        'qty': qty,
+        'max_qty': maxQty,
+        'unit': unit,
+        'decimal': decimal,
+        'price': price,
+        'currency': currency,
+        'cur_price': curPrice,
+      };
+
+  factory CartItem.fromJson(Map<String, dynamic> j) => CartItem(
+        key: _str(j['key']),
+        productId: _intOrNull(j['product_id']) ?? 0,
+        variantId: _intOrNull(j['variant_id']),
+        unitId: _intOrNull(j['unit_id']),
+        optionKey: _str(j['option_key']),
+        pool: _str(j['pool']),
+        multiplier: _num(j['multiplier'], 1),
+        name: _str(j['name']),
+        optionLabel: _str(j['option_label']),
+        sku: _str(j['sku']),
+        image: _str(j['image']),
+        qty: _num(j['qty']),
+        maxQty: _num(j['max_qty']),
+        unit: _str(j['unit']),
+        decimal: j['decimal'] == true,
+        price: _num(j['price']),
+        currency: _str(j['currency']),
+        curPrice: _num(j['cur_price']),
+      );
+}
+
+/// `POST /storefront/orders/` qatori.
+class OrderItemPayload {
+  final int productId;
+  final int? variantId;
+  /// Faqat asosiy bo'lmagan birlik uchun; asosiy birlik — sukut.
+  final int? unitId;
+  /// Tanlangan birlikda (yoki `unitId` bo'lmasa asosiy birlikda).
+  final double qty;
+  const OrderItemPayload({required this.productId, this.variantId, this.unitId, required this.qty});
+
+  Map<String, dynamic> toJson() => {
+        'product_id': productId,
+        if (variantId != null && variantId != 0) 'variant_id': variantId,
+        if (unitId != null && unitId != 0) 'unit_id': unitId,
+        'qty': qty,
+      };
 }

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -12,7 +11,7 @@ import 'api_service.dart';
 @pragma('vm:entry-point')
 Future<void> storePushBgHandler(RemoteMessage message) async {}
 
-/// Mijoz store-app FCM push xizmati. Firebase sozlanmagan bo'lsa (config yo'q)
+/// Mijoz FCM push xizmati. Firebase sozlanmagan bo'lsa (config yo'q)
 /// [available]=false bo'lib jimgina o'chiq turadi — ilova normal ishlaydi.
 class StorePushService {
   StorePushService._();
@@ -24,11 +23,10 @@ class StorePushService {
   String? _customerCode; // login'da o'rnatiladi
 
   final FlutterLocalNotificationsPlugin _local = FlutterLocalNotificationsPlugin();
-  void Function(Map<String, dynamic> data)? onTap;
-  Map<String, dynamic>? _pendingTap;
 
   static const AndroidNotificationChannel _channel = AndroidNotificationChannel(
-    'store_default', 'Bildirishnomalar',
+    'store_default',
+    'Bildirishnomalar',
     description: 'Buyurtma va qarz bildirishnomalari',
     importance: Importance.high,
   );
@@ -45,14 +43,11 @@ class StorePushService {
     try {
       const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
       const iosInit = DarwinInitializationSettings(
-        requestAlertPermission: false, requestBadgePermission: false, requestSoundPermission: false);
-      await _local.initialize(
-        const InitializationSettings(android: androidInit, iOS: iosInit),
-        onDidReceiveNotificationResponse: (resp) {
-          final p = resp.payload;
-          if (p != null && p.isNotEmpty) _emitTap(_decode(p));
-        },
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
       );
+      await _local.initialize(settings: const InitializationSettings(android: androidInit, iOS: iosInit));
       await _local
           .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
           ?.createNotificationChannel(_channel);
@@ -60,24 +55,18 @@ class StorePushService {
       await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);
       FirebaseMessaging.onBackgroundMessage(storePushBgHandler);
       FirebaseMessaging.onMessage.listen(_showForeground);
-      FirebaseMessaging.onMessageOpenedApp.listen((m) => _emitTap(m.data));
-      final initial = await FirebaseMessaging.instance.getInitialMessage();
-      if (initial != null) _pendingTap = Map<String, dynamic>.from(initial.data);
       FirebaseMessaging.instance.onTokenRefresh.listen((t) {
         _token = t;
         if (_customerCode != null) _sendToken(t);
       });
+      // Mijoz init tugashidan oldin kirgan bo'lsa — token endi yuboriladi.
+      if (_customerCode != null) await registerToken();
     } catch (e) {
       debugPrint('StorePush init xato: $e');
     }
   }
 
-  void flushPendingTap() {
-    final p = _pendingTap;
-    if (p != null) { _pendingTap = null; _emitTap(p); }
-  }
-
-  /// Mijoz kirganda chaqiriladi — token backendga (customer kodi bilan) yoziladi.
+  /// Mijoz kirganda chaqiriladi — token backendga (mijoz kodi bilan) yoziladi.
   Future<void> setCustomer(String code) async {
     _customerCode = code;
     await registerToken();
@@ -105,7 +94,9 @@ class StorePushService {
   /// Chiqishda / hisob o'chirilganda — token'ni backend'da o'chiradi.
   Future<void> logout() async {
     if (_token != null) {
-      try { await ApiService.unregisterDevice(_token!); } catch (_) {}
+      try {
+        await ApiService.unregisterDevice(_token!);
+      } catch (_) {}
     }
     _customerCode = null;
     _token = null;
@@ -114,8 +105,7 @@ class StorePushService {
   Future<void> _sendToken(String token) async {
     if (_customerCode == null) return;
     try {
-      await ApiService.registerDevice(
-          _customerCode!, token, Platform.isIOS ? 'ios' : 'android');
+      await ApiService.registerDevice(_customerCode!, token, Platform.isIOS ? 'ios' : 'android');
     } catch (e) {
       debugPrint('StorePush _sendToken xato: $e');
     }
@@ -125,31 +115,20 @@ class StorePushService {
     final n = m.notification;
     if (n == null) return;
     await _local.show(
-      n.hashCode, n.title, n.body,
-      NotificationDetails(
+      id: n.hashCode,
+      title: n.title,
+      body: n.body,
+      notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
-          _channel.id, _channel.name,
+          _channel.id,
+          _channel.name,
           channelDescription: _channel.description,
-          importance: Importance.high, priority: Priority.high,
+          importance: Importance.high,
+          priority: Priority.high,
           icon: n.android?.smallIcon ?? '@mipmap/ic_launcher',
         ),
-        iOS: const DarwinNotificationDetails(
-          presentAlert: true, presentBadge: true, presentSound: true),
+        iOS: const DarwinNotificationDetails(presentAlert: true, presentBadge: true, presentSound: true),
       ),
-      payload: _encode(m.data),
     );
-  }
-
-  void _emitTap(Map<String, dynamic> data) => onTap?.call(data);
-
-  String _encode(Map<String, dynamic> data) {
-    try { return jsonEncode(data); } catch (_) { return '{}'; }
-  }
-
-  Map<String, dynamic> _decode(String s) {
-    try {
-      final v = jsonDecode(s);
-      return v is Map ? Map<String, dynamic>.from(v) : {};
-    } catch (_) { return {}; }
   }
 }

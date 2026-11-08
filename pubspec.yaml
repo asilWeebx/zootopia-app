@@ -1,26 +1,27 @@
 name: online_store_app
-description: "mirsolioptom.uz - Online do'kon"
+description: "Zootopiya — uy hayvonlari do'koni"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
-  sdk: ^3.13.0-282.1.beta
+  sdk: ^3.13.0
 
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.8
-  http: ^1.2.2
-  cached_network_image: ^3.4.1
-  shared_preferences: ^2.3.3
-  intl: ^0.20.2
-  flutter_map: ^8.1.1
-  latlong2: ^0.9.1
-  geolocator: ^13.0.2
+  http: ^1.6.0
+  cached_network_image: ^4.0.1
+  shared_preferences: ^2.5.5
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
+  geolocator: ^14.0.3
+  # Saytdagi lucide-react belgilarining o'zi
+  lucide_icons_flutter: ^3.1.21
   # Push notifications (FCM) — sozlanmaguncha ilova normal ishlaydi
-  firebase_core: ^3.8.0
-  firebase_messaging: ^15.1.6
-  flutter_local_notifications: ^18.0.1
+  firebase_core: ^4.15.0
+  firebase_messaging: ^16.7.0
+  flutter_local_notifications: ^22.3.1
+  url_launcher: ^6.3.3
 
 dev_dependencies:
   flutter_test:
@@ -31,10 +32,37 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
+  image_path: "assets/icon.png"
   remove_alpha_ios: true
-  image_path: "assets/app_icon.png"
+  background_color_ios: "#FBF7F0"
+  adaptive_icon_background: "#FBF7F0"
+  adaptive_icon_foreground: "assets/icon_foreground.png"
 
 flutter:
   uses-material-design: true
   assets:
-    - assets/
+    - assets/brand/
+    - assets/fonts/OFL-Nunito.txt
+    - assets/fonts/OFL-Onest.txt
+  # Saytdagidek: sarlavha va narxlar — Nunito, matn — Onest (ikkalasida kirill bor)
+  fonts:
+    - family: Nunito
+      fonts:
+        - asset: assets/fonts/Nunito-Regular.ttf
+        - asset: assets/fonts/Nunito-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Nunito-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Nunito-ExtraBold.ttf
+          weight: 800
+        - asset: assets/fonts/Nunito-Black.ttf
+          weight: 900
+    - family: Onest
+      fonts:
+        - asset: assets/fonts/Onest-Regular.ttf
+        - asset: assets/fonts/Onest-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Onest-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Onest-Bold.ttf
+          weight: 700

@@ -1,23 +1,30 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import '../config/theme.dart';
-import '../services/geo_service.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-/// Xarita picker natijasi.
+import '../config/store.dart';
+import '../config/theme.dart';
+import '../l10n/strings.dart';
+import '../services/geo_service.dart';
+import '../widgets/ui/button.dart';
+
 class MapPickResult {
   final LatLng point;
   final String? address;
   const MapPickResult(this.point, this.address);
 }
 
-/// Yetkazish joyini xaritada belgilash. Markazdagi pin turadi, xarita
-/// suriladi — markaz koordinatasi reverse-geocode qilinadi. "Shu yerni
-/// tanlash" bosilganda [MapPickResult] qaytaradi.
+/// To'liq ekran xarita, markazda qo'zg'almas pin: mijoz xaritani uning ostidan
+/// suradi. Oxirgi markaz keyingi ochilishda eslab qolinadi.
 class MapPickerScreen extends StatefulWidget {
   final LatLng? initial;
   const MapPickerScreen({super.key, this.initial});
+
+  /// Oxirgi tanlangan markaz (ilova ochiq turganda).
+  static LatLng? lastCenter;
 
   @override
   State<MapPickerScreen> createState() => _MapPickerScreenState();
@@ -27,14 +34,14 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   final _map = MapController();
   late LatLng _center;
   String? _address;
-  bool _loading = false;
+  bool _loading = true;
   bool _locating = false;
   Timer? _debounce;
 
   @override
   void initState() {
     super.initState();
-    _center = widget.initial ?? GeoService.tashkent;
+    _center = widget.initial ?? MapPickerScreen.lastCenter ?? const LatLng(kMapCenterLat, kMapCenterLng);
     WidgetsBinding.instance.addPostFrameCallback((_) => _resolve(_center));
   }
 
@@ -46,16 +53,17 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
 
   void _onMove(LatLng c) {
     _center = c;
+    MapPickerScreen.lastCenter = c;
     _debounce?.cancel();
-    setState(() => _loading = true);
-    _debounce = Timer(const Duration(milliseconds: 650), () => _resolve(c));
+    if (!_loading) setState(() => _loading = true);
+    _debounce = Timer(const Duration(milliseconds: 350), () => _resolve(c));
   }
 
   Future<void> _resolve(LatLng c) async {
-    final addr = await GeoService.reverseGeocode(c.latitude, c.longitude);
-    if (!mounted) return;
+    final address = await GeoService.reverseGeocode(c.latitude, c.longitude);
+    if (!mounted || c != _center) return;
     setState(() {
-      _address = addr;
+      _address = address;
       _loading = false;
     });
   }
@@ -66,13 +74,10 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
       final p = await GeoService.currentPosition();
       if (!mounted) return;
       _map.move(p, 17);
-      _center = p;
-      await _resolve(p);
+      _onMove(p);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString()), backgroundColor: kRed),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: kDanger));
       }
     } finally {
       if (mounted) setState(() => _locating = false);
@@ -81,134 +86,125 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final pad = MediaQuery.paddingOf(context);
     return Scaffold(
-      backgroundColor: kBg,
-      body: Stack(children: [
-        FlutterMap(
-          mapController: _map,
-          options: MapOptions(
-            initialCenter: _center,
-            initialZoom: 16,
-            minZoom: 4,
-            maxZoom: 19,
-            onPositionChanged: (camera, hasGesture) {
-              if (hasGesture) _onMove(camera.center);
-            },
-          ),
-          children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'uz.dukonline.store',
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          FlutterMap(
+            mapController: _map,
+            options: MapOptions(
+              initialCenter: _center,
+              initialZoom: 16,
+              minZoom: 4,
               maxZoom: 19,
+              onPositionChanged: (camera, hasGesture) {
+                if (hasGesture) _onMove(camera.center);
+              },
             ),
-            const RichAttributionWidget(attributions: [
-              TextSourceAttribution('© OpenStreetMap'),
-            ]),
-          ],
-        ),
-
-        // Markazdagi qo'zg'almas pin (xarita ostidan suriladi)
-        IgnorePointer(
-          child: Center(
-            child: Transform.translate(
-              offset: const Offset(0, -18),
-              child: const Icon(Icons.location_on, size: 44, color: kAccentDark),
-            ),
-          ),
-        ),
-
-        // Yopish
-        Positioned(
-          top: MediaQuery.of(context).padding.top + 8,
-          left: 12,
-          child: _RoundBtn(icon: Icons.close, onTap: () => Navigator.pop(context)),
-        ),
-        // Zoom
-        Positioned(
-          top: MediaQuery.of(context).padding.top + 8,
-          right: 12,
-          child: Column(children: [
-            _RoundBtn(icon: Icons.add, onTap: () => _map.move(_center, _map.camera.zoom + 1)),
-            const SizedBox(height: 10),
-            _RoundBtn(icon: Icons.remove, onTap: () => _map.move(_center, _map.camera.zoom - 1)),
-          ]),
-        ),
-        // Meni topish
-        Positioned(
-          right: 12,
-          bottom: 190,
-          child: _RoundBtn(
-            icon: _locating ? Icons.hourglass_top : Icons.my_location,
-            onTap: _locating ? null : _locateMe,
-          ),
-        ),
-
-        // Pastki panel: tanlangan joy + tugma
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: Container(
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-            ),
-            padding: EdgeInsets.fromLTRB(20, 18, 20, MediaQuery.of(context).padding.bottom + 16),
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('TANLANGAN JOY',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: kTextSub, letterSpacing: .6)),
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: kBg, borderRadius: BorderRadius.circular(12)),
-                child: _loading
-                    ? const Text('Aniqlanmoqda...', style: TextStyle(fontSize: 15, color: kTextMuted))
-                    : Text(_address ?? 'Manzil aniqlanmadi (koordinata saqlanadi)',
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: kText)),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.mirsolioptom.store_app',
+                maxZoom: 19,
               ),
-              const SizedBox(height: 14),
-              GestureDetector(
-                onTap: () => Navigator.pop(context, MapPickResult(_center, _address)),
-                child: Container(
-                  height: 52,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: kAccent,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: [BoxShadow(color: kAccent.withAlpha(100), blurRadius: 16, offset: const Offset(0, 4))],
-                  ),
-                  child: const Center(
-                    child: Text('Shu yerni tanlash',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.black)),
-                  ),
-                ),
-              ),
-            ]),
+              const RichAttributionWidget(attributions: [TextSourceAttribution('© OpenStreetMap')]),
+            ],
           ),
-        ),
-      ]),
+          // Markazdagi qo'zg'almas pin: uchi aynan markazda.
+          const IgnorePointer(
+            child: Center(
+              child: Padding(
+                padding: EdgeInsets.only(bottom: 40),
+                child: Icon(Icons.location_on_rounded, size: 44, color: kAccent),
+              ),
+            ),
+          ),
+          Positioned(
+            top: pad.top + kSpace4,
+            left: kSpace4,
+            child: _Round(icon: LucideIcons.x, size: 44, label: tr.mapClose, onTap: () => Navigator.pop(context)),
+          ),
+          Positioned(
+            top: pad.top + kSpace4,
+            right: kSpace4,
+            child: Column(
+              children: [
+                _Round(icon: LucideIcons.plus, label: tr.zoomIn, onTap: () => _map.move(_map.camera.center, _map.camera.zoom + 1)),
+                const SizedBox(height: kSpace2),
+                _Round(icon: LucideIcons.minus, label: tr.zoomOut, onTap: () => _map.move(_map.camera.center, _map.camera.zoom - 1)),
+              ],
+            ),
+          ),
+          Positioned(
+            right: kSpace4,
+            bottom: 200 + pad.bottom,
+            child: _Round(
+              icon: _locating ? LucideIcons.loader : LucideIcons.crosshair,
+              label: tr.mapLocate,
+              onTap: _locating ? null : _locateMe,
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: Container(
+              padding: EdgeInsets.fromLTRB(kSpace5, kSpace5, kSpace5, kSpace5 + pad.bottom),
+              decoration: const BoxDecoration(
+                color: kSurface,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(kRadiusXl)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(tr.mapPicked.toUpperCase(), style: eyebrow(color: kMuted)),
+                  const SizedBox(height: kSpace2),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: kSpace4, vertical: kSpace3),
+                    decoration: BoxDecoration(color: kSurfaceMuted, borderRadius: BorderRadius.circular(kRadiusSm)),
+                    child: Text(
+                      _loading ? tr.locating : (_address ?? tr.mapNoAddress),
+                      style: sans(kTextMd, weight: FontWeight.w600, height: 1.4),
+                    ),
+                  ),
+                  const SizedBox(height: kSpace4),
+                  AppButton(
+                    label: tr.mapConfirm,
+                    size: ButtonSize.lg,
+                    block: true,
+                    onPressed: () => Navigator.pop(context, MapPickResult(_center, _loading ? null : _address)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-class _RoundBtn extends StatelessWidget {
+class _Round extends StatelessWidget {
   final IconData icon;
+  final String label;
   final VoidCallback? onTap;
-  const _RoundBtn({required this.icon, this.onTap});
+  final double size;
+  const _Round({required this.icon, required this.label, this.onTap, this.size = 46});
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            boxShadow: [BoxShadow(color: Colors.black.withAlpha(28), blurRadius: 10, offset: const Offset(0, 3))],
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: label,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: size,
+            height: size,
+            decoration: const BoxDecoration(color: kSurface, shape: BoxShape.circle, boxShadow: kShadowMd),
+            child: Icon(icon, size: 20, color: kInk),
           ),
-          child: Icon(icon, size: 22, color: kText),
         ),
       );
 }

@@ -3,6 +3,8 @@ import 'package:http/http.dart' as http;
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../l10n/strings.dart';
+
 /// Joylashuv xatosi (mijozga ko'rsatiladigan matn bilan).
 class GeoException implements Exception {
   final String message;
@@ -23,7 +25,7 @@ class GeoService {
     try {
       final uri = Uri.parse(
           'https://nominatim.openstreetmap.org/reverse?format=jsonv2'
-          '&lat=$lat&lon=$lng&zoom=18&addressdetails=1&accept-language=uz,ru');
+          '&lat=$lat&lon=$lng&zoom=18&addressdetails=1&accept-language=${appLang.value == AppLang.ru ? 'ru,uz' : 'uz,ru'}');
       final r = await http.get(uri, headers: {
         'User-Agent': 'dukonline-store-app/1.0 (order delivery location)'
       }).timeout(timeout);
@@ -70,17 +72,17 @@ class GeoService {
   /// Joriy GPS joylashuvi. Ruxsat/xizmat yo'q bo'lsa [GeoException].
   static Future<LatLng> currentPosition() async {
     if (!await Geolocator.isLocationServiceEnabled()) {
-      throw GeoException("Joylashuv xizmati o'chiq. Telefon sozlamalaridan yoqing.");
+      throw GeoException(tr.geoOff);
     }
     var perm = await Geolocator.checkPermission();
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
     }
     if (perm == LocationPermission.denied) {
-      throw GeoException("Joylashuvga ruxsat berilmadi.");
+      throw GeoException(tr.geoDenied);
     }
     if (perm == LocationPermission.deniedForever) {
-      throw GeoException("Joylashuv ruxsati bloklangan. Sozlamalardan yoqing.");
+      throw GeoException(tr.geoBlocked);
     }
     final pos = await Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(

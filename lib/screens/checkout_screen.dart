@@ -1,450 +1,596 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:latlong2/latlong.dart';
-import '../models/models.dart';
-import '../services/api_service.dart';
-import '../services/geo_service.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+
+import '../config/store.dart';
 import '../config/theme.dart';
+import '../l10n/strings.dart';
+import '../services/api_service.dart';
+import '../services/cart_lines.dart';
+import '../services/currency.dart';
+import '../services/geo_service.dart';
+import '../services/units.dart';
+import '../state/scope.dart';
+import '../widgets/layout/page.dart';
+import '../widgets/ui/basics.dart';
+import '../widgets/ui/button.dart';
 import 'map_picker_screen.dart';
+import 'navigation.dart';
 
+/// Onlayn hech narsa yechilmaydi: naqd yoki operator aytadigan karta o'tkazmasi.
+List<(String, String, String, IconData)> get _payments => [
+      ('cash', tr.cash.title, tr.cash.text, LucideIcons.banknote),
+      ('card', tr.card.title, tr.card.text, LucideIcons.creditCard),
+    ];
+
+/// O'zbekiston raqami: ko'p mijoz +998 ni yozmaydi — o'zimiz qo'shamiz.
+String normalizeUzPhone(String raw) {
+  final v = raw.trim();
+  if (v.isEmpty || v.startsWith('+')) return v;
+  final digits = v.replaceAll(RegExp(r'\D'), '');
+  if (digits.length == 12 && digits.startsWith('998')) return '+$digits';
+  if (digits.length == 9) return '+998$digits';
+  return v;
+}
+
+/// Rasmiylashtirish — saytdagi `/checkout`.
 class CheckoutScreen extends StatefulWidget {
-  final List<CartItem> cart;
-  final Customer? customer;
-  final ValueChanged<OnlineOrder> onSuccess;
+  const CheckoutScreen({super.key});
 
-  const CheckoutScreen({super.key, required this.cart, this.customer, required this.onSuccess});
   @override
   State<CheckoutScreen> createState() => _CheckoutScreenState();
 }
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
-  final _nameCtrl = TextEditingController();
-  final _phoneCtrl = TextEditingController();
-  final _noteCtrl = TextEditingController();
-  final _addressCtrl = TextEditingController();
-  final _landmarkCtrl = TextEditingController();
-
-  String _delivery = 'courier'; // 'courier' | 'pickup'
-  String _payment = 'cash'; // 'cash' | 'card'
-  double? _lat;
-  double? _lng;
+  final _name = TextEditingController();
+  final _phone = TextEditingController();
+  final _address = TextEditingController();
+  final _landmark = TextEditingController();
+  final _note = TextEditingController();
+  /// Mijoz o'zi yozmaguncha kirgan mijozning ismi/telefoni qo'yiladi.
+  bool _nameTouched = false;
+  bool _phoneTouched = false;
+  String _delivery = 'courier';
+  String _payment = 'cash';
+  LatLng? _coords;
   bool _locating = false;
-  bool _busy = false;
-  String _err = '';
-  OnlineOrder? _done;
-
-  bool get _isCourier => _delivery == 'courier';
+  String _error = '';
+  bool _submitting = false;
 
   @override
   void initState() {
     super.initState();
-    if (widget.customer != null) {
-      _nameCtrl.text = widget.customer!.name;
-      _phoneCtrl.text = widget.customer!.phone ?? '';
-    } else {
-      _phoneCtrl.text = '+998 ';
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _prefill());
   }
 
-  double get _total => widget.cart.fold(0, (s, i) => s + i.price * i.qty);
+  Future<void> _prefill() async {
+    final customer = context.readCatalog.customer;
+    if (customer == null) return;
+    void apply(String name, String phone) {
+      if (!mounted) return;
+      if (!_nameTouched && name.isNotEmpty) _name.text = name;
+      if (!_phoneTouched && phone.isNotEmpty) _phone.text = phone;
+    }
+
+    apply(customer.displayName == customer.customerCode ? '' : customer.displayName,
+        customer.phone.isNotEmpty ? customer.phone : customer.phoneNumber);
+    try {
+      final data = await ApiService.getCustomer(customer.customerCode);
+      final p = data.customer;
+      apply(p.name.isNotEmpty ? p.name : p.customerName, p.phone.isNotEmpty ? p.phone : p.phoneNumber);
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    for (final c in [_name, _phone, _address, _landmark, _note]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
 
   Future<void> _locateMe() async {
-    setState(() { _locating = true; _err = ''; });
+    setState(() {
+      _locating = true;
+      _error = '';
+    });
     try {
       final p = await GeoService.currentPosition();
-      final addr = await GeoService.reverseGeocode(p.latitude, p.longitude);
       if (!mounted) return;
-      setState(() {
-        _lat = p.latitude;
-        _lng = p.longitude;
-        if (addr != null && addr.isNotEmpty) _addressCtrl.text = addr;
-      });
+      setState(() => _coords = p);
+      final found = await GeoService.reverseGeocode(p.latitude, p.longitude);
+      if (found != null && mounted) _address.text = found;
     } catch (e) {
-      if (mounted) setState(() => _err = e.toString());
+      if (mounted) setState(() => _error = e is GeoException ? e.message : tr.geoDenied);
     } finally {
       if (mounted) setState(() => _locating = false);
     }
   }
 
-  Future<void> _pickOnMap() async {
-    final res = await Navigator.push<MapPickResult>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => MapPickerScreen(
-          initial: (_lat != null && _lng != null) ? LatLng(_lat!, _lng!) : null,
-        ),
-      ),
-    );
-    if (res != null && mounted) {
-      setState(() {
-        _lat = res.point.latitude;
-        _lng = res.point.longitude;
-        if (res.address != null && res.address!.isNotEmpty) _addressCtrl.text = res.address!;
-      });
-    }
+  Future<void> _openMap() async {
+    final result = await Navigator.of(context).push<MapPickResult>(MaterialPageRoute(
+      settings: const RouteSettings(name: '/map'),
+      fullscreenDialog: true,
+      builder: (_) => MapPickerScreen(initial: _coords),
+    ));
+    if (result == null || !mounted) return;
+    setState(() => _coords = result.point);
+    if (result.address != null) _address.text = result.address!;
   }
 
   Future<void> _submit() async {
-    if (_nameCtrl.text.trim().isEmpty) { setState(() => _err = 'Ismingizni kiriting'); return; }
-    final phone = normalizeUzPhone(_phoneCtrl.text);
-    if (phone.replaceAll(RegExp(r'\D'), '').length < 9) { setState(() => _err = 'Telefon raqam kiriting'); return; }
-    if (_isCourier && _addressCtrl.text.trim().isEmpty && _lat == null) {
-      setState(() => _err = 'Manzil kiriting yoki xaritadan belgilang');
+    FocusScope.of(context).unfocus();
+    final name = _name.text.trim(), phone = normalizeUzPhone(_phone.text);
+    final courier = _delivery == 'courier';
+    if (name.isEmpty || phone.isEmpty) {
+      setState(() => _error = tr.nameAndPhone);
       return;
     }
-    setState(() { _busy = true; _err = ''; });
+    if (courier && _address.text.trim().isEmpty && _coords == null) {
+      setState(() => _error = tr.addressRequired);
+      return;
+    }
+    final cart = context.readCart;
+    final catalog = context.readCatalog;
+    setState(() {
+      _error = '';
+      _submitting = true;
+    });
+
+    final items = toOrderItems(cart.items);
+    final payload = <String, dynamic>{
+      'customer_name': name,
+      'phone': phone,
+      'delivery_type': _delivery,
+      'payment_method': _payment,
+      if (courier) 'address': _address.text.trim(),
+      if (courier) 'landmark': _landmark.text.trim(),
+      if (courier && _coords != null) 'latitude': _coords!.latitude,
+      if (courier && _coords != null) 'longitude': _coords!.longitude,
+      if (catalog.customer != null) 'customer_code': catalog.customer!.customerCode,
+      if (_note.text.trim().isNotEmpty) 'note': _note.text.trim(),
+      'items': [for (final i in items) i.toJson()],
+    };
+
     try {
-      final order = await ApiService.submitOrder(
-        name: _nameCtrl.text.trim(),
-        phone: phone,
-        note: _noteCtrl.text.trim(),
-        cart: widget.cart,
-        customerCode: widget.customer?.code,
-        deliveryType: _delivery,
-        paymentMethod: _payment,
-        address: _isCourier ? _addressCtrl.text.trim() : null,
-        landmark: _isCourier ? _landmarkCtrl.text.trim() : null,
-        latitude: _isCourier ? _lat : null,
-        longitude: _isCourier ? _lng : null,
-      );
-      if (mounted) { setState(() { _done = order; _busy = false; }); widget.onSuccess(order); }
+      // Ortiqcha qoldiq shu yerda rad etiladi: variantsiz mahsulotda ERP aniq
+      // xabar o'rniga 500 qaytargan. Katalog o'qilmasa — ERP o'zi tekshiradi.
+      final fresh = await ApiService.getCatalog().then((r) => r.results).catchError((Object _) => const <Never>[]);
+      final problems = fresh.isEmpty ? const <String>[] : stockProblems(items, fresh);
+      if (problems.isNotEmpty) {
+        // Qoldiq sahifa ochilgandan beri o'zgargan: yangi katalog savatni qayta cheklaydi.
+        catalog.load();
+        throw StorefrontError(problems.join('\n'), 409);
+      }
+      final orderNo = await ApiService.createOrder(payload);
+      cart.clear();
+      if (!mounted) return;
+      await _showSuccess(orderNo);
+    } on StorefrontError catch (e) {
+      if (mounted) {
+        setState(() => _error = e.status >= 500
+            ? tr.orderFailed
+            : e.message);
+      }
     } catch (e) {
-      if (mounted) setState(() { _busy = false; _err = friendlyError(e); });
+      if (mounted) setState(() => _error = e is NetworkError ? e.toString() : tr.error);
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
   }
 
+  Future<void> _showSuccess(String orderNo) => showGeneralDialog(
+        context: context,
+        barrierDismissible: false,
+        barrierColor: const Color(0x801F2B24),
+        routeSettings: const RouteSettings(name: '/sheet/order-success'),
+        transitionDuration: const Duration(milliseconds: 320),
+        pageBuilder: (dialogContext, _, _) => _OrderSuccess(
+          orderNo: orderNo,
+          onClose: () {
+            Navigator.of(dialogContext).pop();
+            goHome();
+          },
+        ),
+        transitionBuilder: (_, anim, _, child) => FadeTransition(
+          opacity: anim,
+          child: ScaleTransition(scale: Tween(begin: .92, end: 1.0).animate(CurvedAnimation(parent: anim, curve: kEaseBounce)), child: child),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
-    if (_done != null) return _SuccessScreen(order: _done!, onClose: () => Navigator.pop(context));
+    final cart = context.cart;
+    final items = cart.items;
 
-    return Scaffold(
-      backgroundColor: kBg,
-      appBar: AppBar(
-        backgroundColor: Colors.white, surfaceTintColor: Colors.white, elevation: 0,
-        leading: IconButton(icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: kTextSub), onPressed: () => Navigator.pop(context)),
-        title: const Text('Rasmiylashtirish', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: kText)),
-        bottom: const PreferredSize(preferredSize: Size.fromHeight(1), child: Divider(height: 1, color: Color(0xFFF0F0F0))),
-      ),
-      body: Stack(children: [
-        SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 170),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            // ── Yetkazib berish ──
-            const _Label('YETKAZIB BERISH'),
-            _SegToggle(
-              options: const [('courier', 'Kuryer'), ('pickup', 'Olib ketaman')],
+    Widget content;
+    if (!cart.ready) {
+      content = const Padding(padding: EdgeInsets.symmetric(vertical: kSpace6), child: Pulse(child: SkeletonBox(height: 420)));
+    } else if (items.isEmpty) {
+      content = EmptyState(
+        icon: LucideIcons.shoppingCart,
+        title: tr.checkoutEmpty,
+        text: tr.checkoutEmptyText,
+        action: AppButton(label: tr.toCatalog, onPressed: () => openCatalogPage()),
+      );
+    } else {
+      content = _form(context);
+    }
+
+    return DetailPage(
+      title: tr.checkoutTitle,
+      slivers: [SliverToBoxAdapter(child: Gutter(child: content))],
+    );
+  }
+
+  Widget _form(BuildContext context) {
+    final items = context.cart.items;
+    final courier = _delivery == 'courier';
+    final kg = weighedKg(items);
+    var step = 0;
+
+    Widget card(String title, List<Widget> children) {
+      step++;
+      return Container(
+        margin: const EdgeInsets.only(bottom: kSpace4),
+        padding: const EdgeInsets.all(kSpace5),
+        decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(kRadiusXl), boxShadow: kShadowSm),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  alignment: Alignment.center,
+                  decoration: const BoxDecoration(
+                    color: kSunSoft,
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(17),
+                      topRight: Radius.circular(17),
+                      bottomRight: Radius.circular(17),
+                      bottomLeft: Radius.circular(12),
+                    ),
+                  ),
+                  child: Text('$step', style: display(kTextMd, color: kBark)),
+                ),
+                const SizedBox(width: kSpace3),
+                Expanded(child: Text(title, style: display(kTextXl))),
+              ],
+            ),
+            for (final c in children) ...[const SizedBox(height: kSpace4), c],
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: kSpace12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          card(tr.recipient, [
+            _Field(
+              label: tr.name,
+              controller: _name,
+              hint: tr.namePlaceholder,
+              autofill: const [AutofillHints.name],
+              capitalization: TextCapitalization.words,
+              onChanged: (_) => _nameTouched = true,
+            ),
+            _Field(
+              label: tr.phone,
+              controller: _phone,
+              hint: '+998 90 000 00 00',
+              keyboard: TextInputType.phone,
+              autofill: const [AutofillHints.telephoneNumber],
+              onChanged: (_) => _phoneTouched = true,
+            ),
+          ]),
+          card(tr.delivery, [
+            Segmented<String>(
+              options: [('courier', tr.courier), ('pickup', tr.pickup)],
               value: _delivery,
               onChanged: (v) => setState(() => _delivery = v),
             ),
-
-            if (_isCourier) ...[
-              const SizedBox(height: 20),
-              _Field(label: 'YANGI MANZIL', controller: _addressCtrl, hint: 'Ko\'cha, uy, xonadon', icon: Icons.location_on_outlined),
-              const SizedBox(height: 14),
-              _Field(label: 'MO\'LJAL (IXTIYORIY)', controller: _landmarkCtrl, hint: 'Masalan: maktab yonida', icon: Icons.push_pin_outlined),
-              const SizedBox(height: 20),
-              const _Label('JOYLASHUV'),
-              Row(children: [
-                Expanded(child: _LocBtn(
-                  label: _locating ? 'Aniqlanmoqda...' : 'Meni topish',
-                  icon: Icons.my_location,
-                  active: false,
-                  onTap: _locating ? null : _locateMe,
-                )),
-                const SizedBox(width: 12),
-                Expanded(child: _LocBtn(
-                  label: 'Xaritadan belgilash',
-                  icon: Icons.map_outlined,
-                  active: _lat != null,
-                  onTap: _pickOnMap,
-                )),
-              ]),
-              if (_lat != null) Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Row(children: [
-                  const Icon(Icons.check_circle, size: 15, color: kGreen),
-                  const SizedBox(width: 6),
-                  Expanded(child: Text(
-                    _addressCtrl.text.trim().isNotEmpty
-                        ? _addressCtrl.text.trim()
-                        : 'Joylashuv belgilandi (${_lat!.toStringAsFixed(5)}, ${_lng!.toStringAsFixed(5)})',
-                    style: const TextStyle(fontSize: 12, color: kTextSub), maxLines: 2, overflow: TextOverflow.ellipsis)),
-                ]),
+            if (courier) ...[
+              _Field(
+                label: tr.address,
+                controller: _address,
+                hint: tr.addressPlaceholder,
+                autofill: const [AutofillHints.fullStreetAddress],
               ),
-            ],
-
-            // ── To'lov usuli ──
-            const SizedBox(height: 24),
-            const _Label('TO\'LOV USULI'),
-            _PayCard(
-              title: 'Naqd pul',
-              subtitle: 'Kuryerga qo\'lma-qo\'l topshirasiz',
-              icon: Icons.payments_outlined,
-              selected: _payment == 'cash',
-              onTap: () => setState(() => _payment = 'cash'),
-            ),
-            const SizedBox(height: 10),
-            _PayCard(
-              title: 'Karta orqali',
-              subtitle: 'Operator karta raqamini yuboradi',
-              icon: Icons.credit_card_rounded,
-              selected: _payment == 'card',
-              onTap: () => setState(() => _payment = 'card'),
-            ),
-
-            // ── Izoh ──
-            const SizedBox(height: 24),
-            _Field(label: 'IZOH (IXTIYORIY)', controller: _noteCtrl, hint: 'Kuryerga yoki operatorga xabar', icon: Icons.notes_rounded, maxLines: 3),
-
-            // ── Aloqa ──
-            const SizedBox(height: 24),
-            const _Label('ALOQA'),
-            _Field(label: 'Ism familiya', controller: _nameCtrl, hint: 'To\'liq ismingiz', icon: Icons.person_outline_rounded),
-            const SizedBox(height: 12),
-            _Field(
-              label: 'Telefon raqam', controller: _phoneCtrl, hint: '+998 90 000 00 00',
-              icon: Icons.phone_outlined, keyboardType: TextInputType.phone,
-              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d+\-\s()]'))],
-            ),
-
-            // ── Xulosa ──
-            const SizedBox(height: 24),
-            Container(
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
-                boxShadow: [BoxShadow(color: Colors.black.withAlpha(10), blurRadius: 16, offset: const Offset(0, 4))]),
-              padding: const EdgeInsets.all(18),
-              child: Column(children: [
-                Row(children: [
-                  const Text('Mahsulotlar', style: TextStyle(fontSize: 14, color: kTextSub)),
-                  const Spacer(),
-                  Text(cartTotalStr(widget.cart), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: kText)),
-                ]),
-                const SizedBox(height: 8),
-                Row(children: [
-                  const Text('Yetkazib berish', style: TextStyle(fontSize: 14, color: kTextSub)),
-                  const Spacer(),
-                  Text(_isCourier ? 'Operator hisoblaydi' : 'Bepul',
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: kText)),
-                ]),
-                const Divider(color: Color(0xFFF0F0F0), height: 22),
-                Row(children: [
-                  const Text('Jami', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: kText)),
-                  const Spacer(),
-                  Text(cartTotalStr(widget.cart), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: kText)),
-                ]),
-              ]),
-            ),
-
-            if (_err.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: const Color(0xFFFFF5F5),
-                  border: Border.all(color: const Color(0xFFFFCDD2), width: 1.5), borderRadius: BorderRadius.circular(12)),
-                child: Row(children: [
-                  const Icon(Icons.error_outline_rounded, size: 18, color: kRed),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(_err, style: const TextStyle(fontSize: 13, color: kRed))),
-                ]),
+              _Field(label: tr.landmark, controller: _landmark, hint: tr.landmarkPlaceholder),
+              Wrap(
+                spacing: kSpace2,
+                runSpacing: kSpace2,
+                children: [
+                  AppButton(
+                    label: _locating ? tr.locating : tr.locateMe,
+                    variant: ButtonVariant.secondary,
+                    icon: LucideIcons.crosshair,
+                    iconSize: 16,
+                    onPressed: _locating ? null : _locateMe,
+                  ),
+                  AppButton(
+                    label: tr.pickOnMap,
+                    variant: ButtonVariant.secondary,
+                    icon: LucideIcons.mapPin,
+                    iconSize: 16,
+                    onPressed: _openMap,
+                  ),
+                ],
               ),
-            ],
-          ]),
-        ),
-
-        // Pastki tugma
-        Positioned(
-          bottom: 0, left: 0, right: 0,
-          child: Container(
-            decoration: BoxDecoration(color: Colors.white, border: const Border(top: BorderSide(color: Color(0xFFF0F0F0)))),
-            padding: EdgeInsets.fromLTRB(20, 14, 20, MediaQuery.of(context).padding.bottom + 14),
-            child: GestureDetector(
-              onTap: _busy ? null : _submit,
-              child: Container(
-                height: 52, width: double.infinity,
-                decoration: BoxDecoration(
-                  color: _busy ? const Color(0xFFF0F0F0) : kAccent,
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: _busy ? [] : [BoxShadow(color: kAccent.withAlpha(100), blurRadius: 16, offset: const Offset(0, 4))],
+              if (_coords != null)
+                Row(
+                  children: [
+                    const Icon(LucideIcons.check, size: 14, color: kSuccess),
+                    const SizedBox(width: kSpace1),
+                    Text(tr.located, style: sans(kTextSm, weight: FontWeight.w600, color: kSuccess)),
+                  ],
                 ),
-                child: Center(child: _busy
-                  ? const CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
-                  : const Text('Buyurtmani tasdiqlash', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white))),
+            ] else
+              Container(
+                padding: const EdgeInsets.all(kSpace4),
+                decoration: BoxDecoration(color: kPaper, borderRadius: BorderRadius.circular(kRadiusLg)),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(LucideIcons.store, size: 18, color: kAccent),
+                    const SizedBox(width: kSpace3),
+                    Expanded(
+                      child: StoreContact.address.isNotEmpty
+                          ? Text.rich(TextSpan(style: sans(kTextSm, height: 1.55), children: [
+                              TextSpan(text: tr.pickupAt),
+                              TextSpan(text: StoreContact.address, style: const TextStyle(fontWeight: FontWeight.w700)),
+                              if (StoreContact.landmark.isNotEmpty) const TextSpan(text: ' (${StoreContact.landmark})'),
+                              if (StoreContact.hours.isNotEmpty) const TextSpan(text: '. ${StoreContact.hours}'),
+                            ]))
+                          : Text(
+                              tr.pickupCall,
+                              style: sans(kTextSm, height: 1.55),
+                            ),
+                    ),
+                  ],
+                ),
               ),
+          ]),
+          card(tr.payment, [
+            Column(
+              children: [
+                for (final (i, (value, title, text, icon)) in _payments.indexed) ...[
+                  if (i > 0) const SizedBox(height: kSpace2),
+                  GestureDetector(
+                    onTap: () => setState(() => _payment = value),
+                    child: AnimatedContainer(
+                      duration: kDuration,
+                      padding: const EdgeInsets.all(kSpace4),
+                      decoration: BoxDecoration(
+                        color: _payment == value ? kBrandSoft : kSurface,
+                        borderRadius: BorderRadius.circular(kRadiusLg),
+                        border: Border.all(color: _payment == value ? kBrand : kBorder, width: 1.5),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(icon, size: 22, color: kBrand),
+                          const SizedBox(width: kSpace3),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(title, style: sans(kTextMd, weight: FontWeight.w700)),
+                                Text(text, style: sans(kTextXs, color: kMuted)),
+                              ],
+                            ),
+                          ),
+                          AnimatedContainer(
+                            duration: kDuration,
+                            width: 22,
+                            height: 22,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: _payment == value ? kBrand : kBorderStrong, width: _payment == value ? 7 : 2),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ]),
+          card(tr.comment, [
+            _Field(
+              label: tr.commentLabel,
+              controller: _note,
+              hint: tr.commentPlaceholder,
+              maxLines: 3,
+              maxLength: 500,
+            ),
+          ]),
+          const SizedBox(height: kSpace2),
+          Container(
+            padding: const EdgeInsets.all(kSpace5),
+            decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(kRadiusXl), boxShadow: kShadowSm),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(tr.summary, style: display(kTextXl)),
+                const SizedBox(height: kSpace4),
+                for (final (i, item) in items.indexed) ...[
+                  if (i > 0) const SizedBox(height: kSpace3),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text.rich(TextSpan(children: [
+                              TextSpan(text: item.name, style: sans(kTextSm)),
+                              if (item.optionLabel.isNotEmpty) TextSpan(text: ' · ${item.optionLabel}', style: sans(kTextSm, color: kMuted)),
+                            ])),
+                            Text(
+                              '${fmtNumber(item.qty)} ${unitLabel(item.unit)} × ${money(item.curPrice, item.currency)}',
+                              style: sans(kTextXs, color: kMuted),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: kSpace3),
+                      Text(money(lineTotal(item), item.currency), style: display(kTextSm)),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: kSpace4),
+                Container(
+                  padding: const EdgeInsets.only(top: kSpace4),
+                  decoration: const BoxDecoration(border: Border(top: BorderSide(color: kBorder))),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: [
+                      Text.rich(TextSpan(children: [
+                        TextSpan(text: tr.total, style: sans(kTextMd)),
+                        if (kg > 0) TextSpan(text: ' · ${tr.kgFood(fmtNumber(kg))}', style: sans(kTextXs, color: kMuted)),
+                      ])),
+                      const SizedBox(width: kSpace3),
+                      Expanded(child: Text(groupTotal(totalsInput(items)), textAlign: TextAlign.right, style: display(kText2xl))),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: kSpace4),
+                Text(tr.deliveryNote, style: sans(kTextXs, color: kMuted)),
+                if (_error.isNotEmpty) ...[
+                  const SizedBox(height: kSpace4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: kSpace4, vertical: kSpace3),
+                    decoration: BoxDecoration(color: kDangerSoft, borderRadius: BorderRadius.circular(kRadiusMd)),
+                    child: Text(_error, style: sans(kTextSm, weight: FontWeight.w600, color: kDanger)),
+                  ),
+                ],
+                const SizedBox(height: kSpace4),
+                AppButton(
+                  label: _submitting ? tr.submitting : tr.submit,
+                  size: ButtonSize.lg,
+                  block: true,
+                  onPressed: _submitting ? null : _submit,
+                ),
+              ],
             ),
           ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 }
 
-class _Label extends StatelessWidget {
-  final String text;
-  const _Label(this.text);
+/// Yorliqli kiritish maydoni (saytdagi `.field` + `.input`).
+class _Field extends StatelessWidget {
+  final String label;
+  final TextEditingController controller;
+  final String hint;
+  final TextInputType? keyboard;
+  final Iterable<String>? autofill;
+  final int maxLines;
+  final int? maxLength;
+  final TextCapitalization capitalization;
+  final ValueChanged<String>? onChanged;
+
+  const _Field({
+    required this.label,
+    required this.controller,
+    required this.hint,
+    this.keyboard,
+    this.autofill,
+    this.maxLines = 1,
+    this.maxLength,
+    this.capitalization = TextCapitalization.sentences,
+    this.onChanged,
+  });
+
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 10),
-    child: Text(text, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: kTextSub, letterSpacing: .6)),
-  );
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(label, style: sans(kTextSm, weight: FontWeight.w600, color: kInkSoft)),
+          const SizedBox(height: kSpace2),
+          TextField(
+            controller: controller,
+            keyboardType: keyboard ?? (maxLines > 1 ? TextInputType.multiline : TextInputType.text),
+            autofillHints: autofill,
+            maxLines: maxLines,
+            minLines: maxLines > 1 ? maxLines : 1,
+            maxLength: maxLength,
+            textCapitalization: capitalization,
+            onChanged: onChanged,
+            style: sans(kTextMd),
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: sans(kTextMd, color: kFaint),
+              counterText: '',
+              filled: true,
+              fillColor: kBg,
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: kSpace4, vertical: maxLines > 1 ? kSpace3 : 15),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(kRadiusMd),
+                borderSide: const BorderSide(color: kBorder, width: 1.5),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(kRadiusMd),
+                borderSide: const BorderSide(color: kBrand, width: 1.5),
+              ),
+            ),
+          ),
+        ],
+      );
 }
 
-class _SegToggle extends StatelessWidget {
-  final List<(String, String)> options;
-  final String value;
-  final ValueChanged<String> onChanged;
-  const _SegToggle({required this.options, required this.value, required this.onChanged});
+class _OrderSuccess extends StatelessWidget {
+  final String orderNo;
+  final VoidCallback onClose;
+  const _OrderSuccess({required this.orderNo, required this.onClose});
 
   @override
-  Widget build(BuildContext context) => Row(
-    children: options.map((o) {
-      final active = o.$1 == value;
-      return Expanded(
-        child: GestureDetector(
-          onTap: () => onChanged(o.$1),
-          child: Container(
-            margin: EdgeInsets.only(right: o == options.last ? 0 : 12),
-            height: 52,
-            decoration: BoxDecoration(
-              color: active ? kAccent : Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: active ? kAccent : kBorder, width: 1.5),
-              boxShadow: active ? [BoxShadow(color: kAccent.withAlpha(80), blurRadius: 12, offset: const Offset(0, 3))] : [],
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(kSpace4),
+          child: Material(
+            color: kSurface,
+            borderRadius: BorderRadius.circular(kRadiusXl),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 420),
+              padding: const EdgeInsets.fromLTRB(kSpace6, kSpace8, kSpace6, kSpace6),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 80,
+                    height: 80,
+                    decoration: const BoxDecoration(color: kSuccessSoft, shape: BoxShape.circle),
+                    child: const Icon(LucideIcons.check, size: 32, color: kSuccess),
+                  ),
+                  const SizedBox(height: kSpace4),
+                  Text(tr.orderTitle, textAlign: TextAlign.center, style: display(kText2xl)),
+                  const SizedBox(height: kSpace4),
+                  Text(tr.orderNumber, style: sans(kTextSm, color: kMuted)),
+                  Text(orderNo.isEmpty ? '—' : orderNo, style: display(text3xl(context), color: kAccentInk)),
+                  const SizedBox(height: kSpace3),
+                  Text(
+                    tr.orderText,
+                    textAlign: TextAlign.center,
+                    style: sans(kTextMd, color: kInkSoft, height: 1.55),
+                  ),
+                  const SizedBox(height: kSpace6),
+                  AppButton(label: tr.keepShopping, size: ButtonSize.lg, block: true, onPressed: onClose),
+                ],
+              ),
             ),
-            child: Center(child: Text(o.$2,
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: active ? Colors.white : kText))),
           ),
         ),
       );
-    }).toList(),
-  );
 }
 
-class _LocBtn extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool active;
-  final VoidCallback? onTap;
-  const _LocBtn({required this.label, required this.icon, required this.active, this.onTap});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      height: 52,
-      decoration: BoxDecoration(
-        color: active ? kAccent : Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: active ? kAccent : kBorder, width: 1.5),
-      ),
-      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Icon(icon, size: 18, color: active ? Colors.white : kTextSub),
-        const SizedBox(width: 8),
-        Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: active ? Colors.white : kText))),
-      ]),
-    ),
-  );
-}
-
-class _PayCard extends StatelessWidget {
-  final String title, subtitle;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-  const _PayCard({required this.title, required this.subtitle, required this.icon, required this.selected, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: selected ? kAccent : kBorder, width: selected ? 2 : 1.5),
-      ),
-      child: Row(children: [
-        Icon(icon, size: 24, color: kText),
-        const SizedBox(width: 12),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: kText)),
-          const SizedBox(height: 2),
-          Text(subtitle, style: const TextStyle(fontSize: 12, color: kTextSub)),
-        ])),
-        Icon(selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-            size: 22, color: selected ? kAccent : kTextMuted),
-      ]),
-    ),
-  );
-}
-
-class _Field extends StatelessWidget {
-  final String label, hint;
-  final TextEditingController controller;
-  final IconData icon;
-  final int maxLines;
-  final TextInputType? keyboardType;
-  final List<TextInputFormatter>? inputFormatters;
-
-  const _Field({required this.label, required this.controller, required this.hint,
-    required this.icon, this.maxLines = 1, this.keyboardType, this.inputFormatters});
-
-  @override
-  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: kTextSub, letterSpacing: .4)),
-    const SizedBox(height: 6),
-    Container(
-      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: kBorder, width: 1.5), borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withAlpha(8), blurRadius: 10, offset: const Offset(0, 3))]),
-      child: TextField(
-        controller: controller, maxLines: maxLines, keyboardType: keyboardType, inputFormatters: inputFormatters,
-        style: const TextStyle(fontSize: 15, color: kText),
-        decoration: InputDecoration(
-          hintText: hint, hintStyle: const TextStyle(color: kTextMuted),
-          prefixIcon: Icon(icon, size: 18, color: kTextSub),
-          border: InputBorder.none, contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        ),
-      ),
-    ),
-  ]);
-}
-
-class _SuccessScreen extends StatelessWidget {
-  final OnlineOrder order;
-  final VoidCallback onClose;
-  const _SuccessScreen({required this.order, required this.onClose});
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: Colors.white,
-    body: SafeArea(
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Container(
-              width: 100, height: 100,
-              decoration: BoxDecoration(color: const Color(0xFFF0FDF4), shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: kGreen.withAlpha(50), blurRadius: 24, spreadRadius: 4)]),
-              child: const Icon(Icons.check_rounded, size: 52, color: kGreen),
-            ),
-            const SizedBox(height: 28),
-            const Text('Buyurtma qabul qilindi!', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: kText), textAlign: TextAlign.center),
-            const SizedBox(height: 10),
-            Text('Sizning buyurtmangiz №${order.orderNo} raqam bilan ro\'yxatdan o\'tdi',
-              style: const TextStyle(fontSize: 14, color: kTextSub, height: 1.5), textAlign: TextAlign.center),
-            const SizedBox(height: 32),
-            GestureDetector(
-              onTap: onClose,
-              child: Container(
-                width: double.infinity, height: 52,
-                decoration: BoxDecoration(color: kAccent, borderRadius: BorderRadius.circular(14),
-                  boxShadow: [BoxShadow(color: kAccent.withAlpha(100), blurRadius: 16, offset: const Offset(0, 4))]),
-                child: const Center(child: Text('Katalogga qaytish', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white))),
-              ),
-            ),
-          ]),
-        ),
-      ),
-    ),
-  );
-}
