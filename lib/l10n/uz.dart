@@ -310,5 +310,5 @@ final uz = Strings(
   },
   statuses: const {'new': 'Yangi', 'confirmed': 'Tasdiqlangan', 'sold': 'Yetkazilgan', 'cancelled': 'Bekor qilingan'},
   privacyUpdated: (date) => 'Oxirgi yangilanish: $date',
-  privacyDate: '2026-yil 14-avgust',
+  privacyDate: '2026-yil 9-noyabr',
 );

@@ -323,5 +323,5 @@ final ru = Strings(
   },
   statuses: const {'new': 'Новый', 'confirmed': 'Подтверждён', 'sold': 'Доставлен', 'cancelled': 'Отменён'},
   privacyUpdated: (date) => 'Последнее обновление: $date',
-  privacyDate: '14 августа 2026 г.',
+  privacyDate: '9 ноября 2026 г.',
 );
