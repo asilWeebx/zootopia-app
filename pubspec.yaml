@@ -1,7 +1,7 @@
 name: online_store_app
 description: "Zootopiya — uy hayvonlari do'koni"
 publish_to: 'none'
-version: 1.1.0+2
+version: 1.1.0+3
 
 environment:
   sdk: ^3.13.0
@@ -35,8 +35,10 @@ flutter_launcher_icons:
   image_path: "assets/icon.png"
   remove_alpha_ios: true
   background_color_ios: "#2F4A33"
-  adaptive_icon_background: "#2F4A33"
+  adaptive_icon_background: "assets/icon_background.png"
   adaptive_icon_foreground: "assets/icon_foreground.png"
+  # The foreground already keeps the logo inside the safe zone.
+  adaptive_icon_foreground_inset: 0
 
 flutter:
   uses-material-design: true
